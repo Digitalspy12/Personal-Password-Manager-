@@ -1,5 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import hashes
 import json
 import os
 import hashlib
@@ -21,37 +23,50 @@ class PasswordManager:
         self.cipher = Fernet(self.key)
     
     def load_or_generate_key(self):
-        """Load existing key or generate new one"""
+        """Load existing key or generate new one - tied to master password"""
         if os.path.exists(KEY_FILE):
             try:
                 with open(KEY_FILE, 'rb') as f:
                     key = f.read()
                     # Validate the key
-                    if len(key) == 32 and self.is_valid_fernet_key(key):
-                        return key
-                    else:
-                        print("Invalid key found, generating new one...")
-                        return self.generate_and_save_key()
-            except Exception as e:
-                print(f"Error reading key: {e}, generating new one...")
-                return self.generate_and_save_key()
+                    if len(key) == 32:
+                        try:
+                            Fernet(key)  # Test if key is valid
+                            return key
+                        except:
+                            pass
+            except:
+                pass
+        
+        # Generate key based on master password for consistency
+        return self.generate_key_from_master_password()
+    
+    def generate_key_from_master_password(self):
+        """Generate a consistent key from master password"""
+        if not os.path.exists(MASTER_PASSWORD_FILE):
+            # If no master password exists yet, generate a random key
+            key = Fernet.generate_key()
         else:
-            return self.generate_and_save_key()
-    
-    def is_valid_fernet_key(self, key):
-        """Check if key is valid Fernet key"""
-        try:
-            Fernet(key)
-            return True
-        except:
-            return False
-    
-    def generate_and_save_key(self):
-        """Generate a new Fernet key and save it"""
-        key = Fernet.generate_key()
+            # Generate key from master password for consistency
+            with open(MASTER_PASSWORD_FILE, 'r') as f:
+                data = json.load(f)
+                password_hash = data['hash']
+                salt = data['salt']
+            
+            # Use PBKDF2 to derive a key from the master password hash
+            kdf = PBKDF2HMAC(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=salt.encode(),
+                iterations=100000,
+            )
+            key = base64.urlsafe_b64encode(kdf.derive(password_hash.encode()))
+        
+        # Save the key
         with open(KEY_FILE, 'wb') as f:
             f.write(key)
-        print("✅ New encryption key generated and saved")
+        
+        print("✅ Encryption key generated and saved")
         return key
     
     def encrypt_password(self, password):
@@ -59,8 +74,12 @@ class PasswordManager:
         return self.cipher.encrypt(password.encode()).decode()
     
     def decrypt_password(self, encrypted_password):
-        """Decrypt a password"""
-        return self.cipher.decrypt(encrypted_password.encode()).decode()
+        """Decrypt a password with error handling"""
+        try:
+            return self.cipher.decrypt(encrypted_password.encode()).decode()
+        except Exception as e:
+            print(f"❌ Decryption failed: {e}")
+            raise ValueError("Failed to decrypt password. The encryption key may have changed.")
     
     def load_passwords(self):
         """Load all passwords from JSON file"""
@@ -234,10 +253,13 @@ def get_password(entry_id):
     if 'authenticated' not in session:
         return jsonify({'error': 'Not authenticated'}), 401
     
-    entry = pm.get_password(entry_id)
-    if entry:
-        return jsonify(entry)
-    return jsonify({'error': 'Password not found'}), 404
+    try:
+        entry = pm.get_password(entry_id)
+        if entry:
+            return jsonify(entry)
+        return jsonify({'error': 'Password not found'}), 404
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/update_password', methods=['POST'])
 def update_password():
@@ -255,7 +277,7 @@ def update_password():
             flash('Password updated successfully!', 'success')
             return jsonify({'success': True})
         return jsonify({'error': 'Password not found'}), 404
-    except Exception as e:
+    except ValueError as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/delete_password/<entry_id>', methods=['POST'])
@@ -274,8 +296,11 @@ def search_passwords():
     
     query = request.args.get('q', '')
     if query:
-        results = pm.search_passwords(query)
-        return jsonify(results)
+        try:
+            results = pm.search_passwords(query)
+            return jsonify(results)
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 500
     return jsonify([])
 
 @app.route('/generate_password')
