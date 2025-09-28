@@ -2,7 +2,7 @@
 
 A secure, easy-to-use personal password manager built with Python Flask. Store and manage your passwords with military-grade encryption in a simple web interface.
 
-![Password Manager Demo](https://via.placeholder.com/800x400/0d6efd/ffffff?text=Simple+Password+Manager)
+![Password Manager Demo]([https://via.placeholder.com/800x400/0d6efd/ffffff?text=Simple+Password+Manager](https://github.com/Digitalspy12/Personal-Password-Manager-/blob/main/account-recovery.png))
 
 ## ✨ Features
 
